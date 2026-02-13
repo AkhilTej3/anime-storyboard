@@ -88,6 +88,34 @@ export const api = {
         400: errorSchemas.validation,
       },
     },
+    storyboard: {
+      method: "POST" as const,
+      path: "/api/generate/storyboard" as const,
+      input: z.object({
+        script: z.string().min(20),
+        sceneCount: z.number().int().min(2).max(8).default(4),
+        stylePreset: z.string().optional(),
+        size: z.enum(["1024x1024", "512x512", "256x256"]).optional(),
+      }),
+      responses: {
+        201: z.object({
+          job: z.custom<typeof generationJobs.$inferSelect>(),
+          scenes: z.array(
+            z.object({
+              index: z.number(),
+              title: z.string(),
+              summary: z.string(),
+              characterConsistency: z.string(),
+              composition: z.string(),
+              nature: z.string(),
+              asset: z.custom<typeof assets.$inferSelect>(),
+              rendition: z.custom<typeof assetRenditions.$inferSelect>(),
+            })
+          ),
+        }),
+        400: errorSchemas.validation,
+      },
+    },
   },
   chat: {
     conversations: {

@@ -19,6 +19,93 @@ function sizeToDims(size: string): { width: number; height: number } {
   return { width: 1024, height: 1024 };
 }
 
+
+type ParsedScene = {
+  index: number;
+  title: string;
+  summary: string;
+  characterConsistency: string;
+  composition: string;
+  nature: string;
+};
+
+function extractCharacterBible(script: string): string {
+  const names = Array.from(
+    new Set(
+      (script.match(/\b[A-Z][A-Z]{2,}\b/g) ?? [])
+        .map((name) => name.trim())
+        .filter((name) => name.length > 2)
+    )
+  ).slice(0, 6);
+
+  if (!names.length) {
+    return "Maintain visual continuity for recurring protagonists, wardrobe, and emotional expression across all scenes.";
+  }
+
+  return `Maintain continuity for these characters: ${names.join(", ")}. Keep facial features, wardrobe palette, and silhouette consistent scene-to-scene.`;
+}
+
+function normalizeScriptScenes(script: string, targetCount: number): ParsedScene[] {
+  const blocks = script
+    .split(/\n\s*\n/g)
+    .map((block) => block.trim())
+    .filter(Boolean);
+
+  const rawScenes =
+    blocks.length >= 2
+      ? blocks
+      : script
+          .split(/(?<=[.!?])\s+/)
+          .map((part) => part.trim())
+          .filter((part) => part.length > 20);
+
+  const chunks: string[] = [];
+  const effective = Math.max(2, targetCount);
+  for (let i = 0; i < effective; i++) {
+    const start = Math.floor((i * rawScenes.length) / effective);
+    const end = Math.floor(((i + 1) * rawScenes.length) / effective);
+    const slice = rawScenes.slice(start, Math.max(start + 1, end));
+    const text = slice.join(" ").trim();
+    if (text) chunks.push(text);
+  }
+
+  const characterConsistency = extractCharacterBible(script);
+
+  return chunks.slice(0, targetCount).map((sceneText, idx) => {
+    const heading = sceneText.split(/[.!?]/)[0]?.trim() || `Scene ${idx + 1}`;
+    return {
+      index: idx + 1,
+      title: heading.slice(0, 80),
+      summary: sceneText,
+      characterConsistency,
+      composition:
+        idx % 2 === 0
+          ? "Use cinematic wide framing with a clear foreground-middle-background depth stack."
+          : "Use medium shot with an anchored subject and leading lines guiding toward emotional focus.",
+      nature:
+        sceneText.toLowerCase().includes("night")
+          ? "Night ambience with moonlight gradients, reflective highlights, and atmospheric haze."
+          : "Natural environmental storytelling with weather, vegetation, and terrain textures matching the scene tone.",
+    };
+  });
+}
+
+function buildStoryboardPrompt(scene: ParsedScene, stylePreset?: string): string {
+  const styleLine = stylePreset
+    ? `Visual style: ${stylePreset}.`
+    : "Visual style: cinematic anime storyboard concept art.";
+
+  return [
+    `Storyboard scene ${scene.index}: ${scene.title}`,
+    `Scene summary: ${scene.summary}`,
+    `Character consistency: ${scene.characterConsistency}`,
+    `Composition guidance: ${scene.composition}`,
+    `Nature and environment guidance: ${scene.nature}`,
+    styleLine,
+    "Keep continuity with prior frames: same character design language, costume colors, and location identity.",
+  ].join("\n");
+}
+
 async function seedDatabase() {
   const existing = await storage.listAssets();
   if (existing.length > 0) return;
@@ -161,6 +248,95 @@ export async function registerRoutes(
       } as any);
 
       res.status(201).json({ job, asset, rendition });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json(zodToValidation(err));
+      }
+      console.error(err);
+      res.status(500).json({ message: "Internal error" });
+    }
+  });
+
+
+  app.post(api.generate.storyboard.path, async (req, res) => {
+    try {
+      const input = api.generate.storyboard.input.parse(req.body);
+
+      const storyboardScenes = normalizeScriptScenes(input.script, input.sceneCount);
+
+      const job = await storage.createJob({
+        prompt: `Storyboard generation (${storyboardScenes.length} scenes)`,
+        negativePrompt: undefined,
+        stylePreset: input.stylePreset,
+        size: input.size ?? "1024x1024",
+        seed: null as any,
+      } as any);
+
+      await storage.updateJob(job.id, {
+        status: "running" as any,
+        progress: 5,
+      } as any);
+
+      const dims = sizeToDims(input.size ?? "1024x1024");
+      const createdScenes: Array<{
+        index: number;
+        title: string;
+        summary: string;
+        characterConsistency: string;
+        composition: string;
+        nature: string;
+        asset: any;
+        rendition: any;
+      }> = [];
+
+      for (let i = 0; i < storyboardScenes.length; i++) {
+        const scene = storyboardScenes[i];
+        const response = await openai.images.generate({
+          model: "gpt-image-1",
+          prompt: buildStoryboardPrompt(scene, input.stylePreset),
+          size: (input.size ?? "1024x1024") as any,
+        });
+
+        const b64 = response.data[0]?.b64_json;
+        if (!b64) throw new Error(`No image data for scene ${scene.index}`);
+
+        const asset = await storage.createAsset({
+          type: "image",
+          jobId: job.id,
+          title: `Scene ${scene.index}: ${scene.title}`,
+          prompt: scene.summary,
+          metadata: {
+            mode: "storyboard",
+            sceneIndex: scene.index,
+            sceneTitle: scene.title,
+            characterConsistency: scene.characterConsistency,
+            composition: scene.composition,
+            nature: scene.nature,
+          },
+        } as any);
+
+        const rendition = await storage.createRendition({
+          assetId: asset.id,
+          mimeType: "image/png",
+          width: dims.width,
+          height: dims.height,
+          dataBase64: b64,
+        });
+
+        createdScenes.push({ ...scene, asset, rendition });
+
+        await storage.updateJob(job.id, {
+          progress: Math.round(((i + 1) / storyboardScenes.length) * 100),
+        } as any);
+      }
+
+      await storage.updateJob(job.id, {
+        status: "succeeded" as any,
+        progress: 100,
+        completedAt: new Date(),
+      } as any);
+
+      res.status(201).json({ job, scenes: createdScenes });
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json(zodToValidation(err));

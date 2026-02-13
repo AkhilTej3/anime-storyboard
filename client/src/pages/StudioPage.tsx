@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Sparkles, Wand2, Loader2, History, X, Copy } from "lucide-react";
 import { STYLE_PRESETS, type StylePreset } from "@shared/schema";
 import { useGenerateImage } from "@/hooks/use-generate";
+import { useGenerateStoryboard } from "@/hooks/use-generate-storyboard";
 import { useAssets, useLatestRendition } from "@/hooks/use-assets";
 import { AppShell } from "@/components/AppShell";
 import { SectionHeader } from "@/components/SectionHeader";
@@ -21,12 +22,16 @@ type Size = "1024x1024" | "512x512" | "256x256";
 export default function StudioPage() {
   const { toast } = useToast();
   const generate = useGenerateImage();
+  const generateStoryboard = useGenerateStoryboard();
   const assetsQuery = useAssets();
 
   const [prompt, setPrompt] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
   const [stylePreset, setStylePreset] = useState<StylePreset | "none">("Photoreal");
   const [size, setSize] = useState<Size>("1024x1024");
+  const [script, setScript] = useState("");
+  const [sceneCount, setSceneCount] = useState(4);
+  const [storyboardScenes, setStoryboardScenes] = useState<Array<any>>([]);
 
   const latestAsset = useMemo(() => {
     const list = assetsQuery.data ?? [];
@@ -81,6 +86,34 @@ export default function StudioPage() {
     setNegativePrompt("");
   }
 
+
+  async function onGenerateStoryboard() {
+    try {
+      const res = await generateStoryboard.mutateAsync({
+        script,
+        sceneCount,
+        stylePreset: stylePreset === "none" ? undefined : stylePreset,
+        size,
+      });
+
+      setStoryboardScenes(res.scenes);
+      toast({
+        title: "Storyboard generated",
+        description: `Created ${res.scenes.length} scene frames with consistency notes.`,
+      });
+
+      requestAnimationFrame(() => {
+        document.getElementById("storyboard-results")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    } catch (e) {
+      toast({
+        title: "Storyboard generation failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  }
+
   async function copyPrompt() {
     try {
       await navigator.clipboard.writeText(prompt);
@@ -133,6 +166,81 @@ export default function StudioPage() {
             </div>
           }
         />
+
+        <GlowCard data-testid="storyboard-controls" className="p-4 sm:p-6">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">Storyboard mode</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Paste a script to auto-extract scenes and generate consistent character, composition, and nature-driven frames.
+              </div>
+            </div>
+            <Button
+              className="rounded-xl"
+              onClick={onGenerateStoryboard}
+              disabled={script.trim().length < 20 || generateStoryboard.isPending}
+              data-testid="storyboard-generate"
+            >
+              {generateStoryboard.isPending ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generating storyboard…</>
+              ) : (
+                <><Wand2 className="mr-2 h-4 w-4" />Generate storyboard</>
+              )}
+            </Button>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-4 items-start">
+            <div className="space-y-2">
+              <Label htmlFor="script" className="text-sm">Script</Label>
+              <Textarea
+                id="script"
+                value={script}
+                onChange={(e) => setScript(e.target.value)}
+                rows={7}
+                className="rounded-2xl bg-background/60 border-border/70 focus-ring leading-relaxed"
+                placeholder="Paste your scene script here. We'll auto split it into key scenes and keep continuity between frames."
+                data-testid="storyboard-script"
+              />
+            </div>
+            <div className="space-y-2 min-w-28">
+              <Label htmlFor="sceneCount" className="text-sm">Scenes</Label>
+              <Input
+                id="sceneCount"
+                type="number"
+                min={2}
+                max={8}
+                value={sceneCount}
+                onChange={(e) => setSceneCount(Math.max(2, Math.min(8, Number(e.target.value) || 4)))}
+                className="rounded-2xl"
+                data-testid="storyboard-scene-count"
+              />
+            </div>
+          </div>
+
+          {storyboardScenes.length > 0 && (
+            <div id="storyboard-results" className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4" data-testid="storyboard-results">
+              {storyboardScenes.map((scene) => (
+                <div key={scene.asset.id} className="rounded-2xl border border-border/60 bg-card/60 p-3 space-y-3">
+                  <div className="text-sm font-semibold">Scene {scene.index}: {scene.title}</div>
+                  <div className="text-xs text-muted-foreground leading-relaxed">{scene.summary}</div>
+                  {scene.rendition?.dataBase64 ? (
+                    <img
+                      src={`data:image/png;base64,${scene.rendition.dataBase64}`}
+                      alt={`Storyboard scene ${scene.index}`}
+                      className="w-full rounded-xl border border-border/60"
+                    />
+                  ) : null}
+                  <div className="text-xs space-y-1">
+                    <div><span className="font-medium">Character consistency:</span> {scene.characterConsistency}</div>
+                    <div><span className="font-medium">Composition:</span> {scene.composition}</div>
+                    <div><span className="font-medium">Nature:</span> {scene.nature}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </GlowCard>
+
 
         <div className="grid grid-cols-1 xl:grid-cols-[1.05fr_0.95fr] gap-6 lg:gap-8">
           <GlowCard data-testid="studio-controls" className="p-4 sm:p-6">

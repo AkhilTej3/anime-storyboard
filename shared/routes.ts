@@ -1,0 +1,167 @@
+import { z } from "zod";
+import {
+  insertGenerationJobSchema,
+  insertAssetSchema,
+  insertAssetRenditionSchema,
+  generationJobs,
+  assets,
+  assetRenditions,
+  conversations,
+  messages,
+  insertConversationSchema,
+} from "./schema";
+
+export const errorSchemas = {
+  validation: z.object({
+    message: z.string(),
+    field: z.string().optional(),
+  }),
+  notFound: z.object({
+    message: z.string(),
+  }),
+  internal: z.object({
+    message: z.string(),
+  }),
+};
+
+export const api = {
+  jobs: {
+    list: {
+      method: "GET" as const,
+      path: "/api/jobs" as const,
+      responses: {
+        200: z.array(z.custom<typeof generationJobs.$inferSelect>()),
+      },
+    },
+    get: {
+      method: "GET" as const,
+      path: "/api/jobs/:id" as const,
+      responses: {
+        200: z.custom<typeof generationJobs.$inferSelect>(),
+        404: errorSchemas.notFound,
+      },
+    },
+  },
+  assets: {
+    list: {
+      method: "GET" as const,
+      path: "/api/assets" as const,
+      responses: {
+        200: z.array(z.custom<typeof assets.$inferSelect>()),
+      },
+    },
+    get: {
+      method: "GET" as const,
+      path: "/api/assets/:id" as const,
+      responses: {
+        200: z.custom<typeof assets.$inferSelect>(),
+        404: errorSchemas.notFound,
+      },
+    },
+    renditions: {
+      getLatest: {
+        method: "GET" as const,
+        path: "/api/assets/:id/rendition" as const,
+        responses: {
+          200: z.custom<typeof assetRenditions.$inferSelect>(),
+          404: errorSchemas.notFound,
+        },
+      },
+    },
+  },
+  generate: {
+    image: {
+      method: "POST" as const,
+      path: "/api/generate/image" as const,
+      input: z.object({
+        prompt: z.string().min(1),
+        negativePrompt: z.string().optional(),
+        stylePreset: z.string().optional(),
+        size: z.enum(["1024x1024", "512x512", "256x256"]).optional(),
+      }),
+      responses: {
+        201: z.object({
+          job: z.custom<typeof generationJobs.$inferSelect>(),
+          asset: z.custom<typeof assets.$inferSelect>(),
+          rendition: z.custom<typeof assetRenditions.$inferSelect>(),
+        }),
+        400: errorSchemas.validation,
+      },
+    },
+  },
+  chat: {
+    conversations: {
+      list: {
+        method: "GET" as const,
+        path: "/api/conversations" as const,
+        responses: {
+          200: z.array(z.custom<typeof conversations.$inferSelect>()),
+        },
+      },
+      get: {
+        method: "GET" as const,
+        path: "/api/conversations/:id" as const,
+        responses: {
+          200: z.object({
+            conversation: z.custom<typeof conversations.$inferSelect>(),
+            messages: z.array(z.custom<typeof messages.$inferSelect>()),
+          }),
+          404: errorSchemas.notFound,
+        },
+      },
+      create: {
+        method: "POST" as const,
+        path: "/api/conversations" as const,
+        input: insertConversationSchema
+          .extend({ title: z.string().min(1) })
+          .partial({ title: true }),
+        responses: {
+          201: z.custom<typeof conversations.$inferSelect>(),
+          400: errorSchemas.validation,
+        },
+      },
+      delete: {
+        method: "DELETE" as const,
+        path: "/api/conversations/:id" as const,
+        responses: {
+          204: z.void(),
+          404: errorSchemas.notFound,
+        },
+      },
+      messages: {
+        create: {
+          method: "POST" as const,
+          path: "/api/conversations/:id/messages" as const,
+          input: z.object({
+            content: z.string().min(1),
+          }),
+          responses: {
+            200: z.unknown(),
+            400: errorSchemas.validation,
+          },
+        },
+      },
+    },
+  },
+};
+
+export function buildUrl(
+  path: string,
+  params?: Record<string, string | number>
+): string {
+  let url = path;
+  if (params) {
+    for (const [key, value] of Object.entries(params)) {
+      url = url.replace(`:${key}`, String(value));
+    }
+  }
+  return url;
+}
+
+export type GenerateImageInput = z.infer<typeof api.generate.image.input>;
+export type GenerateImageResponse = z.infer<
+  typeof api.generate.image.responses[201]
+>;
+export type ValidationError = z.infer<typeof errorSchemas.validation>;
+export type NotFoundError = z.infer<typeof errorSchemas.notFound>;
+export type InternalError = z.infer<typeof errorSchemas.internal>;

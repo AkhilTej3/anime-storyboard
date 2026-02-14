@@ -3,7 +3,7 @@ import type { Server } from "http";
 import { z } from "zod";
 import { api } from "@shared/routes";
 import { storage } from "./storage";
-import { openai } from "./replit_integrations/image/client";
+import { generateImageBase64 } from "./image-provider";
 
 function zodToValidation(err: z.ZodError) {
   const first = err.errors[0];
@@ -204,13 +204,11 @@ export async function registerRoutes(
 
       const prompt = expandedPromptParts.join("\n");
 
-      const response = await openai.images.generate({
-        model: "gpt-image-1",
+      const b64 = await generateImageBase64(
         prompt,
-        size: (input.size ?? "1024x1024") as any,
-      });
+        (input.size ?? "1024x1024") as "1024x1024" | "512x512" | "256x256"
+      );
 
-      const b64 = response.data[0]?.b64_json;
       if (!b64) {
         await storage.updateJob(job.id, {
           status: "failed" as any,
@@ -291,13 +289,11 @@ export async function registerRoutes(
 
       for (let i = 0; i < storyboardScenes.length; i++) {
         const scene = storyboardScenes[i];
-        const response = await openai.images.generate({
-          model: "gpt-image-1",
-          prompt: buildStoryboardPrompt(scene, input.stylePreset),
-          size: (input.size ?? "1024x1024") as any,
-        });
+        const b64 = await generateImageBase64(
+          buildStoryboardPrompt(scene, input.stylePreset),
+          (input.size ?? "1024x1024") as "1024x1024" | "512x512" | "256x256"
+        );
 
-        const b64 = response.data[0]?.b64_json;
         if (!b64) throw new Error(`No image data for scene ${scene.index}`);
 
         const asset = await storage.createAsset({

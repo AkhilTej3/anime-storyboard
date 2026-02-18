@@ -27,7 +27,7 @@ export default function StudioPage() {
 
   const [prompt, setPrompt] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
-  const [stylePreset, setStylePreset] = useState<StylePreset | "none">("Photoreal");
+  const [stylePreset, setStylePreset] = useState<StylePreset | "none">("Anime");
   const [size, setSize] = useState<Size>("1024x1024");
   const [script, setScript] = useState("");
   const [sceneCount, setSceneCount] = useState(4);

@@ -37,6 +37,7 @@ async function generateWithOpenAI(prompt: string, size: SupportedSize): Promise<
 }
 
 function buildBedrockAuthHeaders(body: string, canonicalPath: string, region: string, service: string) {
+  console.log("Building Bedrock auth headers...");
   const apiKey = process.env.BEDROCK_API_KEY;
   const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
   const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
@@ -48,7 +49,7 @@ function buildBedrockAuthHeaders(body: string, canonicalPath: string, region: st
   const payloadHash = hashSha256(body);
 
   const host = `bedrock-runtime.${region}.amazonaws.com`;
-
+  console.log(`Building Bedrock auth headers with host: ${host}, amzDate: ${amzDate}, payloadHash: ${payloadHash}, apiKey: ${apiKey}`);
   if (apiKey) {
     return {
       host,
@@ -123,7 +124,7 @@ async function generateWithBedrock(prompt: string, size: SupportedSize): Promise
   const region = process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "us-east-1";
   const service = "bedrock";
 
-  const body = JSON.stringify({
+  let body = JSON.stringify({
     taskType: "TEXT_IMAGE",
     textToImageParams: {
       text: prompt,
@@ -136,35 +137,44 @@ async function generateWithBedrock(prompt: string, size: SupportedSize): Promise
     },
   });
 
-  const encodedModelId = encodeURIComponent(modelId);
-  const canonicalPath = `/model/${encodedModelId}/invoke`;
+  // body = {
+  //   "text_prompts": [{ "text": prompt }],
+  //   "style_preset": "photorealistic",
+  //   "seed": Math.floor(Math.random() * 1000000)
+  // }.toString();
 
-  const auth = buildBedrockAuthHeaders(body, canonicalPath, region, service);
 
-  const response = await fetch(`https://${auth.host}${canonicalPath}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-amz-date": auth.amzDate,
-      "x-amz-content-sha256": auth.payloadHash,
-      ...(auth.sessionToken ? { "x-amz-security-token": auth.sessionToken } : {}),
-      ...(auth.authorization ? { authorization: auth.authorization } : {}),
-      ...(auth.apiKey ? { "x-api-key": auth.apiKey } : {}),
-    },
-    body,
-  });
+const encodedModelId = encodeURIComponent(modelId);
+const canonicalPath = `/model/${encodedModelId}/invoke`;
 
-  if (!response.ok) {
-    throw new Error(`Bedrock request failed (${response.status}): ${await response.text()}`);
-  }
+const auth = buildBedrockAuthHeaders(body, canonicalPath, region, service);
+console.log(`Auth headers for Bedrock request: ${JSON.stringify(auth)}`);
 
-  const parsed = (await response.json()) as { images?: string[]; error?: string };
-  const base64 = parsed.images?.[0];
-  if (!base64) {
-    throw new Error(parsed.error ?? "Bedrock returned no image data");
-  }
+const response = await fetch(`https://${auth.host}${canonicalPath}`, {
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    "Authorization": `Bearer ${auth.apiKey}`,
+    "x-amz-date": auth.amzDate,
+    "x-amz-content-sha256": auth.payloadHash,
+    ...(auth.sessionToken ? { "x-amz-security-token": auth.sessionToken } : {}),
+    ...(auth.authorization ? { authorization: auth.authorization } : {}),
+    ...(auth.apiKey ? { "x-api-key": auth.apiKey } : {}),
+  },
+  body,
+});
 
-  return base64;
+if (!response.ok) {
+  throw new Error(`Bedrock request failed (${response.status}): ${await response.text()}`);
+}
+
+const parsed = (await response.json()) as { images?: string[]; error?: string };
+const base64 = parsed.images?.[0];
+if (!base64) {
+  throw new Error(parsed.error ?? "Bedrock returned no image data");
+}
+
+return base64;
 }
 
 export async function generateImageBase64(
@@ -172,7 +182,7 @@ export async function generateImageBase64(
   size: SupportedSize = "1024x1024"
 ): Promise<string> {
   const provider = getImageProvider();
-
+  console.log(`Generating image with provider: ${provider}`);
   if (provider === "bedrock") {
     return generateWithBedrock(prompt, size);
   }

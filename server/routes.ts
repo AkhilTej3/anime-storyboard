@@ -288,6 +288,7 @@ export async function registerRoutes(
       }> = [];
 
       for (let i = 0; i < storyboardScenes.length; i++) {
+        console.log(`Generating image for scene ${i + 1}/${storyboardScenes.length}...`,input);
         const scene = storyboardScenes[i];
         const b64 = await generateImageBase64(
           buildStoryboardPrompt(scene, input.stylePreset),

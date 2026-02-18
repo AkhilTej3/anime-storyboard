@@ -3,6 +3,7 @@ import { Sparkles, Wand2, Loader2, History, X, Copy } from "lucide-react";
 import { STYLE_PRESETS, type StylePreset } from "@shared/schema";
 import { useGenerateImage } from "@/hooks/use-generate";
 import { useGenerateStoryboard } from "@/hooks/use-generate-storyboard";
+import { useGenerateProjectPack } from "@/hooks/use-generate-project-pack";
 import { useAssets, useLatestRendition } from "@/hooks/use-assets";
 import { AppShell } from "@/components/AppShell";
 import { SectionHeader } from "@/components/SectionHeader";
@@ -23,14 +24,26 @@ export default function StudioPage() {
   const { toast } = useToast();
   const generate = useGenerateImage();
   const generateStoryboard = useGenerateStoryboard();
+  const generateProjectPack = useGenerateProjectPack();
   const assetsQuery = useAssets();
 
   const [prompt, setPrompt] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
   const [stylePreset, setStylePreset] = useState<StylePreset | "none">("Anime");
   const [size, setSize] = useState<Size>("1024x1024");
+  const [projectName, setProjectName] = useState("");
+  const [assetTitle, setAssetTitle] = useState("");
+  const [assetCategory, setAssetCategory] = useState<"character" | "environment" | "nature" | "general">("character");
   const [script, setScript] = useState("");
   const [sceneCount, setSceneCount] = useState(4);
+  const [characterNotes, setCharacterNotes] = useState("");
+  const [environmentNotes, setEnvironmentNotes] = useState("");
+  const [natureNotes, setNatureNotes] = useState("");
+  const [referenceAssetIdsInput, setReferenceAssetIdsInput] = useState("");
+  const [characterCount, setCharacterCount] = useState(2);
+  const [environmentCount, setEnvironmentCount] = useState(2);
+  const [natureCount, setNatureCount] = useState(2);
+  const [projectAssetIds, setProjectAssetIds] = useState<number[]>([]);
   const [storyboardScenes, setStoryboardScenes] = useState<Array<any>>([]);
 
   const latestAsset = useMemo(() => {
@@ -44,7 +57,7 @@ export default function StudioPage() {
   useEffect(() => {
     // Seed a tasteful default prompt for empty state
     if (!prompt) {
-      setPrompt("A minimal product photo of a translucent perfume bottle on soft paper, studio light, ultra clean, crisp shadows");
+      setPrompt("Hero character full-body concept sheet, cel-shaded anime style, clean linework, neutral studio backdrop");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -53,6 +66,9 @@ export default function StudioPage() {
     try {
       const res = await generate.mutateAsync({
         prompt,
+        title: assetTitle.trim() || undefined,
+        projectName: projectName.trim() || undefined,
+        assetCategory,
         negativePrompt: negativePrompt.trim() ? negativePrompt : undefined,
         stylePreset: stylePreset === "none" ? undefined : stylePreset,
         size,
@@ -87,11 +103,70 @@ export default function StudioPage() {
   }
 
 
+  async function onGenerateProjectPack() {
+    try {
+      const res = await generateProjectPack.mutateAsync({
+        projectName: projectName.trim(),
+        script,
+        characterCount,
+        environmentCount,
+        natureCount,
+        stylePreset: stylePreset === "none" ? undefined : stylePreset,
+        size,
+      });
+
+      const ids = [
+        ...res.assets.characters.map((asset) => asset.id),
+        ...res.assets.environments.map((asset) => asset.id),
+        ...res.assets.nature.map((asset) => asset.id),
+      ];
+
+      setProjectAssetIds(ids);
+      setReferenceAssetIdsInput(ids.join(", "));
+
+      toast({
+        title: "Project assets generated",
+        description: `Created ${ids.length} reusable reference assets for ${projectName.trim()}.`,
+      });
+    } catch (e) {
+      toast({
+        title: "Project asset generation failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  }
+
   async function onGenerateStoryboard() {
     try {
+      const manuallyProvidedReferenceAssetIds = referenceAssetIdsInput
+        .split(",")
+        .map((value) => Number(value.trim()))
+        .filter((value) => Number.isInteger(value) && value > 0);
+
+      const fallbackProjectAssetIds = projectAssetIds.length
+        ? projectAssetIds
+        : (assetsQuery.data ?? [])
+            .filter((asset: any) => {
+              const metadata = (asset.metadata ?? {}) as Record<string, unknown>;
+              const category = metadata.assetCategory;
+              return metadata.projectName === projectName.trim() && (category === "character" || category === "environment" || category === "nature");
+            })
+            .slice(0, 24)
+            .map((asset: any) => asset.id);
+
+      const referenceAssetIds = manuallyProvidedReferenceAssetIds.length
+        ? manuallyProvidedReferenceAssetIds
+        : fallbackProjectAssetIds;
+
       const res = await generateStoryboard.mutateAsync({
         script,
         sceneCount,
+        projectName: projectName.trim(),
+        characterNotes: characterNotes.trim() || undefined,
+        environmentNotes: environmentNotes.trim() || undefined,
+        natureNotes: natureNotes.trim() || undefined,
+        referenceAssetIds: referenceAssetIds.length ? referenceAssetIds : undefined,
         stylePreset: stylePreset === "none" ? undefined : stylePreset,
         size,
       });
@@ -123,7 +198,7 @@ export default function StudioPage() {
     }
   }
 
-  const canGenerate = prompt.trim().length > 0 && !generate.isPending;
+  const canGenerate = prompt.trim().length > 0 && projectName.trim().length > 0 && !generate.isPending;
 
   return (
     <AppShell>
@@ -175,10 +250,24 @@ export default function StudioPage() {
                 Paste a script to auto-extract scenes and generate consistent character, composition, and nature-driven frames.
               </div>
             </div>
+            <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              className="rounded-xl"
+              onClick={onGenerateProjectPack}
+              disabled={projectName.trim().length < 1 || script.trim().length < 20 || generateProjectPack.isPending || generateStoryboard.isPending}
+              data-testid="project-pack-generate"
+            >
+              {generateProjectPack.isPending ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generating project assets…</>
+              ) : (
+                <><History className="mr-2 h-4 w-4" />Generate project assets</>
+              )}
+            </Button>
             <Button
               className="rounded-xl"
               onClick={onGenerateStoryboard}
-              disabled={script.trim().length < 20 || generateStoryboard.isPending}
+              disabled={projectName.trim().length < 1 || script.trim().length < 20 || generateStoryboard.isPending || generateProjectPack.isPending}
               data-testid="storyboard-generate"
             >
               {generateStoryboard.isPending ? (
@@ -187,6 +276,74 @@ export default function StudioPage() {
                 <><Wand2 className="mr-2 h-4 w-4" />Generate storyboard</>
               )}
             </Button>
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+            <div className="space-y-2">
+              <Label htmlFor="projectName" className="text-sm">Project name</Label>
+              <Input
+                id="projectName"
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                className="rounded-2xl"
+                placeholder="e.g. Forest Spirits Episode 01"
+                data-testid="studio-project-name"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="referenceAssets" className="text-sm">Reference asset IDs</Label>
+              <Input
+                id="referenceAssets"
+                value={referenceAssetIdsInput}
+                onChange={(e) => setReferenceAssetIdsInput(e.target.value)}
+                className="rounded-2xl"
+                placeholder="e.g. 12, 15, 27"
+                data-testid="storyboard-reference-assets"
+              />
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+            <div className="space-y-2">
+              <Label htmlFor="characterCount" className="text-sm">Character refs</Label>
+              <Input
+                id="characterCount"
+                type="number"
+                min={1}
+                max={6}
+                value={characterCount}
+                onChange={(e) => setCharacterCount(Math.max(1, Math.min(6, Number(e.target.value) || 2)))}
+                className="rounded-2xl"
+                data-testid="project-character-count"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="environmentCount" className="text-sm">Environment refs</Label>
+              <Input
+                id="environmentCount"
+                type="number"
+                min={1}
+                max={6}
+                value={environmentCount}
+                onChange={(e) => setEnvironmentCount(Math.max(1, Math.min(6, Number(e.target.value) || 2)))}
+                className="rounded-2xl"
+                data-testid="project-environment-count"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="natureCount" className="text-sm">Nature refs</Label>
+              <Input
+                id="natureCount"
+                type="number"
+                min={1}
+                max={6}
+                value={natureCount}
+                onChange={(e) => setNatureCount(Math.max(1, Math.min(6, Number(e.target.value) || 2)))}
+                className="rounded-2xl"
+                data-testid="project-nature-count"
+              />
+            </div>
           </div>
 
           <div className="mt-4 grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-4 items-start">
@@ -213,6 +370,45 @@ export default function StudioPage() {
                 onChange={(e) => setSceneCount(Math.max(2, Math.min(8, Number(e.target.value) || 4)))}
                 className="rounded-2xl"
                 data-testid="storyboard-scene-count"
+              />
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="characterNotes" className="text-sm">Character notes</Label>
+              <Textarea
+                id="characterNotes"
+                value={characterNotes}
+                onChange={(e) => setCharacterNotes(e.target.value)}
+                rows={3}
+                className="rounded-2xl bg-background/60 border-border/70 focus-ring"
+                placeholder="Define core character design consistency."
+                data-testid="storyboard-character-notes"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="environmentNotes" className="text-sm">Environment notes</Label>
+              <Textarea
+                id="environmentNotes"
+                value={environmentNotes}
+                onChange={(e) => setEnvironmentNotes(e.target.value)}
+                rows={3}
+                className="rounded-2xl bg-background/60 border-border/70 focus-ring"
+                placeholder="Define locations and set dressing style."
+                data-testid="storyboard-environment-notes"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="natureNotes" className="text-sm">Nature notes</Label>
+              <Textarea
+                id="natureNotes"
+                value={natureNotes}
+                onChange={(e) => setNatureNotes(e.target.value)}
+                rows={3}
+                className="rounded-2xl bg-background/60 border-border/70 focus-ring"
+                placeholder="Define weather, foliage, terrain mood."
+                data-testid="storyboard-nature-notes"
               />
             </div>
           </div>
@@ -250,6 +446,34 @@ export default function StudioPage() {
             </div>
 
             <div className="mt-4 grid grid-cols-1 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="assetTitle" className="text-sm">Asset title</Label>
+                  <Input
+                    id="assetTitle"
+                    value={assetTitle}
+                    onChange={(e) => setAssetTitle(e.target.value)}
+                    className="rounded-2xl bg-background/60 border-border/70 focus-ring"
+                    placeholder="e.g. Aya turnaround sheet"
+                    data-testid="studio-asset-title"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm">Category</Label>
+                  <Select value={assetCategory} onValueChange={(v) => setAssetCategory(v as any)}>
+                    <SelectTrigger className="rounded-2xl bg-background/60 border-border/70" data-testid="studio-asset-category">
+                      <SelectValue placeholder="Category" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="character">Character</SelectItem>
+                      <SelectItem value="environment">Environment</SelectItem>
+                      <SelectItem value="nature">Nature</SelectItem>
+                      <SelectItem value="general">General</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
               <div className="space-y-2">
                 <Label htmlFor="prompt" className="text-sm" data-testid="studio-prompt-label">
                   Prompt

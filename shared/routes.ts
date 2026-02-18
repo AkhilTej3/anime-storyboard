@@ -75,6 +75,9 @@ export const api = {
       path: "/api/generate/image" as const,
       input: z.object({
         prompt: z.string().min(1),
+        title: z.string().min(1).max(120).optional(),
+        projectName: z.string().min(1).max(120).optional(),
+        assetCategory: z.enum(["character", "environment", "nature", "general"]).optional(),
         negativePrompt: z.string().optional(),
         stylePreset: z.string().optional(),
         size: z.enum(["1024x1024", "512x512", "256x256"]).optional(),
@@ -88,12 +91,42 @@ export const api = {
         400: errorSchemas.validation,
       },
     },
+
+    projectPack: {
+      method: "POST" as const,
+      path: "/api/generate/project-pack" as const,
+      input: z.object({
+        projectName: z.string().min(1).max(120),
+        script: z.string().min(20),
+        characterCount: z.number().int().min(1).max(6).default(2),
+        environmentCount: z.number().int().min(1).max(6).default(2),
+        natureCount: z.number().int().min(1).max(6).default(2),
+        stylePreset: z.string().optional(),
+        size: z.enum(["1024x1024", "512x512", "256x256"]).optional(),
+      }),
+      responses: {
+        201: z.object({
+          job: z.custom<typeof generationJobs.$inferSelect>(),
+          assets: z.object({
+            characters: z.array(z.custom<typeof assets.$inferSelect>()),
+            environments: z.array(z.custom<typeof assets.$inferSelect>()),
+            nature: z.array(z.custom<typeof assets.$inferSelect>()),
+          }),
+        }),
+        400: errorSchemas.validation,
+      },
+    },
     storyboard: {
       method: "POST" as const,
       path: "/api/generate/storyboard" as const,
       input: z.object({
         script: z.string().min(20),
         sceneCount: z.number().int().min(2).max(8).default(4),
+        projectName: z.string().min(1).max(120),
+        characterNotes: z.string().optional(),
+        environmentNotes: z.string().optional(),
+        natureNotes: z.string().optional(),
+        referenceAssetIds: z.array(z.number().int().positive()).max(24).optional(),
         stylePreset: z.string().optional(),
         size: z.enum(["1024x1024", "512x512", "256x256"]).optional(),
       }),

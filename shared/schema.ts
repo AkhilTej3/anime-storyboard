@@ -78,6 +78,24 @@ export const jobStatusEnum = pgEnum("job_status", [
 ]);
 
 export const assetTypeEnum = pgEnum("asset_type", ["image"]);
+export const projectStatusEnum = pgEnum("project_status", [
+  "active",
+  "paused",
+  "archived",
+]);
+export const registryAssetTypeEnum = pgEnum("registry_asset_type", [
+  "character",
+  "environment",
+  "nature",
+  "prop",
+]);
+export const lockStateEnum = pgEnum("lock_state", ["draft", "locked"]);
+export const sceneStatusEnum = pgEnum("scene_status", [
+  "draft",
+  "compiled",
+  "ready",
+  "rendered",
+]);
 
 export const generationJobs = pgTable("generation_jobs", {
   id: serial("id").primaryKey(),
@@ -91,6 +109,65 @@ export const generationJobs = pgTable("generation_jobs", {
   error: text("error"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   completedAt: timestamp("completed_at"),
+});
+
+export const projects = pgTable("projects", {
+  id: varchar("id").primaryKey(),
+  name: text("name").notNull(),
+  visualStyle: text("visual_style").notNull(),
+  baseModel: text("base_model").notNull().default("SDXL"),
+  defaultSampler: text("default_sampler").notNull().default("DPM++"),
+  status: projectStatusEnum("status").notNull().default("active"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectAssets = pgTable("project_assets", {
+  id: varchar("id").primaryKey(),
+  projectId: varchar("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  type: registryAssetTypeEnum("type").notNull(),
+  name: text("name").notNull(),
+  description: text("description").notNull(),
+  canonicalPrompt: text("canonical_prompt").notNull(),
+  negativePrompt: text("negative_prompt").notNull().default(""),
+  seed: integer("seed"),
+  sampler: text("sampler").notNull().default("DPM++"),
+  version: integer("version").notNull().default(1),
+  lockState: lockStateEnum("lock_state").notNull().default("draft"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const compiledScenes = pgTable("compiled_scenes", {
+  id: varchar("id").primaryKey(),
+  projectId: varchar("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  scriptId: varchar("script_id").notNull(),
+  sceneIndex: integer("scene_index").notNull(),
+  status: sceneStatusEnum("status").notNull().default("compiled"),
+  graph: jsonb("graph").$type<Record<string, unknown>>().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const sceneFrames = pgTable("scene_frames", {
+  id: varchar("id").primaryKey(),
+  projectId: varchar("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  sceneId: varchar("scene_id")
+    .notNull()
+    .references(() => compiledScenes.id, { onDelete: "cascade" }),
+  frameIndex: integer("frame_index").notNull(),
+  renderVersion: integer("render_version").notNull().default(1),
+  consistencyScore: integer("consistency_score").notNull().default(100),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  assetId: integer("asset_id").references(() => assets.id, {
+    onDelete: "set null",
+  }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const assets = pgTable("assets", {
@@ -126,6 +203,19 @@ export const insertGenerationJobSchema = createInsertSchema(generationJobs).omit
   createdAt: true,
   completedAt: true,
 });
+export const insertProjectSchema = createInsertSchema(projects).omit({
+  createdAt: true,
+});
+export const insertProjectAssetSchema = createInsertSchema(projectAssets).omit({
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertCompiledSceneSchema = createInsertSchema(compiledScenes).omit({
+  createdAt: true,
+});
+export const insertSceneFrameSchema = createInsertSchema(sceneFrames).omit({
+  createdAt: true,
+});
 
 export const insertAssetSchema = createInsertSchema(assets).omit({
   id: true,
@@ -145,6 +235,14 @@ export type InsertAsset = z.infer<typeof insertAssetSchema>;
 
 export type AssetRendition = typeof assetRenditions.$inferSelect;
 export type InsertAssetRendition = z.infer<typeof insertAssetRenditionSchema>;
+export type Project = typeof projects.$inferSelect;
+export type InsertProject = z.infer<typeof insertProjectSchema>;
+export type ProjectAsset = typeof projectAssets.$inferSelect;
+export type InsertProjectAsset = z.infer<typeof insertProjectAssetSchema>;
+export type CompiledScene = typeof compiledScenes.$inferSelect;
+export type InsertCompiledScene = z.infer<typeof insertCompiledSceneSchema>;
+export type SceneFrame = typeof sceneFrames.$inferSelect;
+export type InsertSceneFrame = z.infer<typeof insertSceneFrameSchema>;
 
 // Explicit API contract types
 export type CreateGenerationJobRequest = InsertGenerationJob;

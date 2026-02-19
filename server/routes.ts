@@ -20,6 +20,37 @@ function sizeToDims(size: string): { width: number; height: number } {
 }
 
 
+function slugify(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+}
+
+function buildSceneGraph(script: string, sceneCount: number) {
+  const lines = script
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 20);
+
+  const chunks = lines.length ? lines : [script];
+  return Array.from({ length: sceneCount }).map((_, i) => {
+    const summary = chunks[i % chunks.length];
+    return {
+      sceneIndex: i + 1,
+      title: `Scene ${i + 1}`,
+      summary,
+      mood: /fight|angry|tense|fear/i.test(summary) ? "tense" : "calm",
+      lighting: /night|dark|moon/i.test(summary) ? "night" : "day",
+      camera: i % 2 === 0 ? "wide shot" : "medium shot",
+      action: summary,
+    };
+  });
+}
+
+
+
 type ParsedScene = {
   index: number;
   title: string;
@@ -595,6 +626,196 @@ export async function registerRoutes(
       console.error(err);
       res.status(500).json({ message: "Internal error" });
     }
+  });
+
+
+  app.get(api.projects.list.path, async (_req, res) => {
+    const rows = await storage.listProjects();
+    res.json(rows);
+  });
+
+  app.post(api.projects.create.path, async (req, res) => {
+    try {
+      const input = api.projects.create.input.parse(req.body);
+      const existing = await storage.getProject(input.id);
+      if (existing) return res.status(400).json({ message: "Project id already exists", field: "id" });
+      const row = await storage.createProject({
+        id: input.id,
+        name: input.name,
+        visualStyle: input.visualStyle,
+        baseModel: input.baseModel,
+        defaultSampler: input.defaultSampler,
+        status: "active",
+      });
+      res.status(201).json(row);
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json(zodToValidation(err));
+      console.error(err);
+      res.status(500).json({ message: "Internal error" });
+    }
+  });
+
+  app.get(api.projects.assets.list.path, async (req, res) => {
+    const project = await storage.getProject(String(req.params.projectId));
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    const list = await storage.listProjectAssets(project.id);
+    res.json(list);
+  });
+
+  app.post(api.projects.assets.create.path, async (req, res) => {
+    try {
+      const projectId = String(req.params.projectId);
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+
+      const input = api.projects.assets.create.input.parse(req.body);
+      const id = `${input.type.toUpperCase().slice(0, 4)}_${slugify(input.name)}_${Date.now().toString(36)}`;
+      const row = await storage.createProjectAsset({
+        id,
+        projectId,
+        type: input.type,
+        name: input.name,
+        description: input.description,
+        canonicalPrompt: input.canonicalPrompt,
+        negativePrompt: input.negativePrompt,
+        seed: input.seed ?? Math.floor(Math.random() * 10_000_000),
+        sampler: input.sampler,
+        version: 1,
+        lockState: "draft",
+        metadata: input.metadata,
+      });
+
+      res.status(201).json(row);
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json(zodToValidation(err));
+      console.error(err);
+      res.status(500).json({ message: "Internal error" });
+    }
+  });
+
+  app.post(api.projects.assets.lock.path, async (req, res) => {
+    const projectId = String(req.params.projectId);
+    const assetId = String(req.params.assetId);
+    const row = await storage.lockProjectAsset(projectId, assetId);
+    if (!row) return res.status(404).json({ message: "Project asset not found" });
+    res.json(row);
+  });
+
+  app.post(api.projects.scenes.compile.path, async (req, res) => {
+    try {
+      const projectId = String(req.params.projectId);
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+
+      const input = api.projects.scenes.compile.input.parse(req.body);
+      const graphs = buildSceneGraph(input.script, input.sceneCount);
+      const rows = [];
+      for (const graph of graphs) {
+        const sceneId = `SCN_${projectId}_${String(graph.sceneIndex).padStart(3, "0")}`;
+        const row = await storage.createCompiledScene({
+          id: sceneId,
+          projectId,
+          scriptId: input.scriptId,
+          sceneIndex: graph.sceneIndex,
+          status: "compiled",
+          graph,
+        });
+        rows.push(row);
+      }
+      res.status(201).json({ scenes: rows });
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json(zodToValidation(err));
+      console.error(err);
+      res.status(500).json({ message: "Internal error" });
+    }
+  });
+
+  app.post(api.projects.scenes.render.path, async (req, res) => {
+    try {
+      const projectId = String(req.params.projectId);
+      const sceneId = String(req.params.sceneId);
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const scene = await storage.getCompiledScene(projectId, sceneId);
+      if (!scene) return res.status(404).json({ message: "Scene not found" });
+      const input = api.projects.scenes.render.input.parse(req.body);
+
+      const refs = await storage.listProjectAssets(projectId);
+      const lockedRefs = refs.filter((a) => a.lockState === "locked");
+      if (!lockedRefs.length) {
+        return res.status(400).json({ message: "No locked project assets available for scene rendering" });
+      }
+
+      const graph = scene.graph as Record<string, unknown>;
+      const prompt = [
+        `Project: ${project.name}`,
+        `Visual style anchor: ${project.visualStyle}`,
+        `Scene ${scene.sceneIndex}: ${String(graph.summary ?? "")}`,
+        `Camera: ${String(graph.camera ?? "wide shot")}`,
+        `Lighting: ${String(graph.lighting ?? "day")}`,
+        `Action: ${String(graph.action ?? "")}`,
+        `Locked references: ${lockedRefs.map((a) => `${a.id}@v${a.version}`).join(", ")}`,
+      ].join("\n");
+
+      const size = input.size ?? "1024x1024";
+      const b64 = await generateImageBase64(prompt, size);
+      const job = await storage.createJob({
+        prompt,
+        stylePreset: input.stylePreset,
+        size,
+        seed: null as any,
+      } as any);
+      const asset = await storage.createAsset({
+        type: "image",
+        jobId: job.id,
+        title: `Frame ${input.frameIndex} - ${sceneId}`,
+        prompt,
+        metadata: {
+          mode: "scene-render",
+          projectId,
+          sceneId,
+          sourceSceneGraph: scene.graph,
+          lockedAssetIds: lockedRefs.map((a) => a.id),
+        },
+      } as any);
+      const dims = sizeToDims(size);
+      const rendition = await storage.createRendition({
+        assetId: asset.id,
+        mimeType: "image/png",
+        width: dims.width,
+        height: dims.height,
+        dataBase64: b64,
+      });
+
+      const frame = await storage.createSceneFrame({
+        id: `FRM_${sceneId}_${String(input.frameIndex).padStart(3, "0")}_${Date.now().toString(36)}`,
+        projectId,
+        sceneId,
+        frameIndex: input.frameIndex,
+        renderVersion: 1,
+        consistencyScore: 100,
+        metadata: {
+          lockedAssetIds: lockedRefs.map((a) => a.id),
+          renderedFromLockedAssetsOnly: true,
+        },
+        assetId: asset.id,
+      });
+
+      res.status(201).json({ frame, asset, rendition });
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json(zodToValidation(err));
+      console.error(err);
+      res.status(500).json({ message: "Internal error" });
+    }
+  });
+
+  app.get(api.projects.scenes.timeline.path, async (req, res) => {
+    const projectId = String(req.params.projectId);
+    const sceneId = String(req.params.sceneId);
+    const scene = await storage.getCompiledScene(projectId, sceneId);
+    if (!scene) return res.status(404).json({ message: "Scene not found" });
+    const frames = await storage.listSceneFrames(projectId, sceneId);
+    res.json(frames);
   });
 
   // Text chat integration endpoints (non-conflicting)

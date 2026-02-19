@@ -1,4 +1,5 @@
 import { z } from "zod";
+
 import {
   insertGenerationJobSchema,
   insertAssetSchema,
@@ -9,6 +10,10 @@ import {
   conversations,
   messages,
   insertConversationSchema,
+  projects,
+  projectAssets,
+  compiledScenes,
+  sceneFrames,
 } from "./schema";
 
 export const errorSchemas = {
@@ -147,6 +152,111 @@ export const api = {
           ),
         }),
         400: errorSchemas.validation,
+      },
+    },
+  },
+  projects: {
+    list: {
+      method: "GET" as const,
+      path: "/api/projects" as const,
+      responses: {
+        200: z.array(z.custom<typeof projects.$inferSelect>()),
+      },
+    },
+    create: {
+      method: "POST" as const,
+      path: "/api/projects" as const,
+      input: z.object({
+        id: z.string().min(3).max(80),
+        name: z.string().min(1).max(120),
+        visualStyle: z.string().min(1).max(200),
+        baseModel: z.string().min(1).max(80).default("SDXL"),
+        defaultSampler: z.string().min(1).max(80).default("DPM++"),
+      }),
+      responses: {
+        201: z.custom<typeof projects.$inferSelect>(),
+        400: errorSchemas.validation,
+      },
+    },
+    assets: {
+      list: {
+        method: "GET" as const,
+        path: "/api/projects/:projectId/assets" as const,
+        responses: {
+          200: z.array(z.custom<typeof projectAssets.$inferSelect>()),
+          404: errorSchemas.notFound,
+        },
+      },
+      create: {
+        method: "POST" as const,
+        path: "/api/projects/:projectId/assets" as const,
+        input: z.object({
+          type: z.enum(["character", "environment", "nature", "prop"]),
+          name: z.string().min(1).max(160),
+          description: z.string().min(1),
+          canonicalPrompt: z.string().min(1),
+          negativePrompt: z.string().default(""),
+          sampler: z.string().default("DPM++"),
+          seed: z.number().int().optional(),
+          metadata: z.record(z.string(), z.unknown()).default({}),
+        }),
+        responses: {
+          201: z.custom<typeof projectAssets.$inferSelect>(),
+          400: errorSchemas.validation,
+          404: errorSchemas.notFound,
+        },
+      },
+      lock: {
+        method: "POST" as const,
+        path: "/api/projects/:projectId/assets/:assetId/lock" as const,
+        responses: {
+          200: z.custom<typeof projectAssets.$inferSelect>(),
+          404: errorSchemas.notFound,
+        },
+      },
+    },
+    scenes: {
+      compile: {
+        method: "POST" as const,
+        path: "/api/projects/:projectId/scenes/compile" as const,
+        input: z.object({
+          scriptId: z.string().min(1).default("SCRIPT_001"),
+          script: z.string().min(20),
+          sceneCount: z.number().int().min(1).max(12).default(4),
+        }),
+        responses: {
+          201: z.object({
+            scenes: z.array(z.custom<typeof compiledScenes.$inferSelect>()),
+          }),
+          400: errorSchemas.validation,
+          404: errorSchemas.notFound,
+        },
+      },
+      render: {
+        method: "POST" as const,
+        path: "/api/projects/:projectId/scenes/:sceneId/render" as const,
+        input: z.object({
+          frameIndex: z.number().int().min(1).default(1),
+          stylePreset: z.string().optional(),
+          size: z.enum(["1024x1024", "512x512", "256x256"]).optional(),
+        }),
+        responses: {
+          201: z.object({
+            frame: z.custom<typeof sceneFrames.$inferSelect>(),
+            asset: z.custom<typeof assets.$inferSelect>(),
+            rendition: z.custom<typeof assetRenditions.$inferSelect>(),
+          }),
+          400: errorSchemas.validation,
+          404: errorSchemas.notFound,
+        },
+      },
+      timeline: {
+        method: "GET" as const,
+        path: "/api/projects/:projectId/scenes/:sceneId/timeline" as const,
+        responses: {
+          200: z.array(z.custom<typeof sceneFrames.$inferSelect>()),
+          404: errorSchemas.notFound,
+        },
       },
     },
   },
